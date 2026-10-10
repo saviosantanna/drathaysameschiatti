@@ -93,12 +93,7 @@ export default function PublicPage() {
         setRedirectCountdown((prev) => prev - 1);
       }, 1000);
     } else if (bookingSuccess && redirectCountdown === 0 && whatsappRedirectUrl) {
-      window.open(whatsappRedirectUrl, '_blank');
-      setBookingModalSlot(null);
-      setBookingSuccess(false);
-      setPatientName('');
-      setPatientPhone('');
-      setNotes('');
+      window.location.href = whatsappRedirectUrl;
     }
     return () => clearTimeout(timer);
   }, [bookingSuccess, redirectCountdown, whatsappRedirectUrl]);
@@ -223,12 +218,7 @@ export default function PublicPage() {
 
   const handleManualRedirect = () => {
     if (whatsappRedirectUrl) {
-      window.open(whatsappRedirectUrl, '_blank');
-      setBookingModalSlot(null);
-      setBookingSuccess(false);
-      setPatientName('');
-      setPatientPhone('');
-      setNotes('');
+      window.location.href = whatsappRedirectUrl;
     }
   };
 
@@ -628,13 +618,14 @@ export default function PublicPage() {
                   <span>Redirecionando automaticamente em <b>{redirectCountdown}</b> segundos...</span>
                 </div>
 
-                <button
+                <a
+                  href={whatsappRedirectUrl}
                   onClick={handleManualRedirect}
-                  className="w-full py-3 px-4 rounded-xl gold-gradient-bg text-black font-extrabold text-sm flex items-center justify-center gap-2 hover:brightness-110 active:scale-98 transition shadow-lg"
+                  className="w-full py-3.5 px-4 rounded-xl gold-gradient-bg text-black font-extrabold text-sm flex items-center justify-center gap-2 hover:brightness-110 active:scale-98 transition shadow-lg text-center"
                 >
                   <MessageCircle className="w-5 h-5" />
-                  <span>Ir para o WhatsApp Agora</span>
-                </button>
+                  <span>Enviar Mensagem no WhatsApp da Dra. Thaysa</span>
+                </a>
               </div>
             ) : (
               <form onSubmit={handleSubmitBooking} className="space-y-4">

@@ -58,9 +58,20 @@ export default function AdminPage() {
   // Modal State - Edit Link
   const [editingLink, setEditingLink] = useState<LinkItem | null>(null);
 
+  // Modal State - Agendamento Confirmado / Redirecionamento WhatsApp
+  const [confirmedNotification, setConfirmedNotification] = useState<{
+    patientName: string;
+    patientPhone: string;
+    date: string;
+    time: string;
+    procedure: string;
+    waUrl: string;
+  } | null>(null);
+
   // Form State - New Slot
   const [batchDate, setBatchDate] = useState('');
   const [selectedTimes, setSelectedTimes] = useState<string[]>(['09:00', '10:30', '14:00', '15:30']);
+  const [filterDate, setFilterDate] = useState<string>('all');
 
   const commonTimesList = [
     '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
@@ -300,9 +311,86 @@ export default function AdminPage() {
     }
   };
 
-  const handleUpdateBookingStatus = async (bookingId: string, status: 'confirmed' | 'cancelled') => {
+  const handleDeleteDaySlots = async (dateStr: string) => {
+    if (!confirm(`Deseja remover TODOS os horários cadastrados para a data ${dateStr}?`)) return;
+    const daySlots = (data?.slots || []).filter((s) => s.date === dateStr);
     try {
-      const booking = data?.bookings.find((b) => b.id === bookingId);
+      for (const slot of daySlots) {
+        await fetch(`/api/slots?slotId=${slot.id}`, { method: 'DELETE' });
+      }
+      fetchData();
+    } catch (err) {
+      alert('Erro ao excluir horários do dia.');
+    }
+  };
+
+  const formatDateLabel = (dateStr: string) => {
+    if (!dateStr) return '';
+    try {
+      const [y, m, d] = dateStr.split('-');
+      const dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const diffDays = Math.round((dateObj.getTime() - today.getTime()) / (1000 * 3600 * 24));
+      const dayName = dateObj.toLocaleDateString('pt-BR', { weekday: 'long' });
+      const dayNameCapitalized = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+      const monthName = dateObj.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+
+      if (diffDays === 0) return `Hoje (${d}/${m}) • ${dayNameCapitalized}`;
+      if (diffDays === 1) return `Amanhã (${d}/${m}) • ${dayNameCapitalized}`;
+      return `${dayNameCapitalized}, ${d} de ${monthName}`;
+    } catch (e) {
+      return dateStr;
+    }
+  };
+
+  const generateWhatsAppConfirmationUrl = (booking: {
+    patientName: string;
+    patientPhone: string;
+    date: string;
+    time: string;
+    procedure: string;
+  }) => {
+    const [y, m, d] = booking.date.split('-');
+    const dateFormatted = y && m && d ? `${d}/${m}/${y}` : booking.date;
+    const cleanPhone = booking.patientPhone.replace(/\D/g, '');
+    const phoneWithCountry = cleanPhone.startsWith('55') ? cleanPhone : `55${cleanPhone}`;
+
+    const text = encodeURIComponent(
+      `*AGENDAMENTO CONFIRMADO - DRA. THAYSA MESCHIATTI* 🦷✨\n\n` +
+      `Olá, *${booking.patientName}*! Seu agendamento foi *confirmado com sucesso*!\n\n` +
+      `📅 *Data:* ${dateFormatted}\n` +
+      `⏰ *Horário:* ${booking.time}\n` +
+      `🦷 *Procedimento:* ${booking.procedure}\n` +
+      `📍 *Local:* Consultório Dra. Thaysa Meschiatti - CRO ES 11914\n\n` +
+      `Estamos te aguardando! Caso tenha alguma dúvida ou precise remarcar, favor avisar por aqui.`
+    );
+
+    return `https://wa.me/${phoneWithCountry}?text=${text}`;
+  };
+
+  const handleUpdateBookingStatus = async (bookingId: string, status: 'confirmed' | 'cancelled') => {
+    const booking =
+      data?.bookings.find((b) => b.id === bookingId) ||
+      data?.slots.find((s) => s.booking?.id === bookingId)?.booking;
+
+    let waUrl = '';
+    if (status === 'confirmed' && booking) {
+      waUrl = generateWhatsAppConfirmationUrl(booking);
+    }
+
+    // Janela síncrona aberta no evento de clique para prevenir bloqueio de pop-up no navegador
+    let syncPopup: Window | null = null;
+    if (status === 'confirmed' && waUrl && typeof window !== 'undefined') {
+      try {
+        syncPopup = window.open('about:blank', '_blank');
+      } catch (e) {
+        syncPopup = null;
+      }
+    }
+
+    try {
       const res = await fetch('/api/slots', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -316,26 +404,31 @@ export default function AdminPage() {
       if (json.success) {
         fetchData();
 
-        if (status === 'confirmed' && booking) {
-          const [y, m, d] = booking.date.split('-');
-          const dateFormatted = `${d}/${m}/${y}`;
-          const cleanPhone = booking.patientPhone.replace(/\D/g, '');
-          const phoneWithCountry = cleanPhone.startsWith('55') ? cleanPhone : `55${cleanPhone}`;
+        if (status === 'confirmed' && booking && waUrl) {
+          // 1. Se abriu em aba do navegador desktop, atualiza o endereço
+          if (syncPopup && !syncPopup.closed) {
+            syncPopup.location.href = waUrl;
+          } else {
+            // 2. Se o navegador bloqueou o pop-up ou em dispositivos móveis, redireciona diretamente
+            window.location.href = waUrl;
+          }
 
-          const text = encodeURIComponent(
-            `*AGENDAMENTO CONFIRMADO - DRA. THAYSA MESCHIATTI*\n\n` +
-            `• *Paciente:* ${booking.patientName}\n` +
-            `• *Data:* ${dateFormatted}\n` +
-            `• *Horário:* ${booking.time}\n` +
-            `• *Procedimento:* ${booking.procedure}\n\n` +
-            `Olá ${booking.patientName}! Seu agendamento foi CONFIRMADO com sucesso! Aguardo você no consultório no dia ${dateFormatted} às ${booking.time}.\n\nQualquer dúvida ou imprevisto, favor avisar por aqui.`
-          );
-
-          const waUrl = `https://wa.me/${phoneWithCountry}?text=${text}`;
-          window.open(waUrl, '_blank');
+          // 3. Exibe o modal informativo na tela com o link direto clicável
+          setConfirmedNotification({
+            patientName: booking.patientName,
+            patientPhone: booking.patientPhone,
+            date: booking.date,
+            time: booking.time,
+            procedure: booking.procedure,
+            waUrl,
+          });
         }
+      } else {
+        if (syncPopup && !syncPopup.closed) syncPopup.close();
+        alert(json.message || 'Erro ao atualizar solicitação.');
       }
     } catch (err) {
+      if (syncPopup && !syncPopup.closed) syncPopup.close();
       alert('Erro ao atualizar solicitação.');
     }
   };
@@ -448,6 +541,7 @@ export default function AdminPage() {
 
   const { profile, links, slots, bookings } = data;
   const pendingBookings = bookings.filter((b) => b.status === 'pending');
+  const confirmedBookings = bookings.filter((b) => b.status === 'confirmed');
 
   return (
     <div className="min-h-screen bg-[#0a0a0c] text-neutral-100 flex flex-col">
@@ -935,6 +1029,68 @@ export default function AdminPage() {
                 </div>
               )}
 
+              {/* CONFIRMED BOOKINGS LIST */}
+              {confirmedBookings.length > 0 && (
+                <div className="p-6 glass-panel rounded-3xl border border-emerald-500/30 bg-emerald-950/10 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                      <h2 className="serif-title text-xl font-bold text-emerald-200">
+                        Agendamentos Confirmados ({confirmedBookings.length})
+                      </h2>
+                    </div>
+                    <span className="text-xs bg-emerald-500/20 text-emerald-300 font-bold px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+                      Prontos para Atendimento
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {confirmedBookings.map((b) => (
+                      <div
+                        key={b.id}
+                        className="p-4 rounded-2xl bg-black/60 border border-emerald-500/30 space-y-3"
+                      >
+                        <div className="flex items-center justify-between gap-2 border-b border-emerald-500/20 pb-2">
+                          <div>
+                            <span className="text-xs text-emerald-300/90 font-mono">
+                              {b.date} às {b.time}
+                            </span>
+                            <h3 className="text-base font-bold text-white">{b.patientName}</h3>
+                          </div>
+                          <span className="text-xs bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-500/30 font-semibold">
+                            {b.procedure}
+                          </span>
+                        </div>
+
+                        <div className="text-xs text-neutral-300 space-y-1">
+                          <p><span className="text-neutral-500">Telefone:</span> {b.patientPhone}</p>
+                          {b.notes && <p><span className="text-neutral-500">Obs:</span> {b.notes}</p>}
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-1">
+                          <a
+                            href={generateWhatsAppConfirmationUrl(b)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 transition shadow-md"
+                          >
+                            <MessageCircle className="w-4 h-4" />
+                            <span>Enviar Confirmação WhatsApp</span>
+                          </a>
+                          <button
+                            onClick={() => handleUpdateBookingStatus(b.id, 'cancelled')}
+                            className="p-2 text-neutral-400 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition"
+                            title="Cancelar / Liberar Horário"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* BATCH CREATE SLOTS */}
               <div className="glass-panel p-6 rounded-3xl border border-amber-500/20 space-y-4">
                 <h2 className="serif-title text-xl font-bold text-white flex items-center gap-2">
@@ -991,55 +1147,265 @@ export default function AdminPage() {
                 </button>
               </div>
 
-              {/* EXISTING SLOTS LIST */}
-              <div className="glass-panel p-6 rounded-3xl border border-amber-500/20 space-y-4">
-                <h2 className="serif-title text-xl font-bold text-white">
-                  Agenda Cadastrada ({slots.length} horários)
-                </h2>
+              {/* EXISTING SLOTS LIST - SEPARADO POR DIAS */}
+              <div className="glass-panel p-6 rounded-3xl border border-amber-500/20 space-y-6">
+                
+                {/* Cabeçalho da Seção com Contadores */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-500/20 pb-4">
+                  <div>
+                    <h2 className="serif-title text-xl font-bold text-white flex items-center gap-2">
+                      <Calendar className="w-5 h-5 text-amber-400" /> Agenda Cadastrada ({slots.length} horários em {Array.from(new Set(slots.map((s) => s.date))).length} dias)
+                    </h2>
+                    <p className="text-xs text-neutral-400">
+                      Visualização organizada e separada por cada dia disponível.
+                    </p>
+                  </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {slots.map((s) => (
-                    <div
-                      key={s.id}
-                      className="p-3.5 rounded-2xl bg-neutral-900/90 border border-amber-500/10 flex flex-col justify-between space-y-2"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-neutral-400">{s.date}</span>
-                        <span className="font-mono text-sm font-bold text-white">{s.time}</span>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-1 pt-1 border-t border-neutral-800">
-                        <button
-                          onClick={() =>
-                            handleUpdateSlotStatus(
-                              s.id,
-                              s.status === 'available' ? 'booked' : 'available'
-                            )
-                          }
-                          className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition ${
-                            s.status === 'available'
-                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                              : s.status === 'pending'
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                              : 'bg-red-500/20 text-red-300 border-red-500/30'
-                          }`}
-                        >
-                          {s.status === 'available' && 'Livre (Clique p/ Fechar)'}
-                          {s.status === 'pending' && 'Pendente'}
-                          {s.status === 'booked' && 'Ocupado (Clique p/ Abrir)'}
-                        </button>
-
-                        <button
-                          onClick={() => handleDeleteSlot(s.id)}
-                          className="p-1 text-neutral-500 hover:text-red-400 transition"
-                          title="Remover Horário"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                  {/* Badges de Resumo */}
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                      {slots.filter((s) => s.status === 'available').length} Livres
+                    </span>
+                    <span className="px-2.5 py-1 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                      {slots.filter((s) => s.status === 'pending').length} Pendentes
+                    </span>
+                    <span className="px-2.5 py-1 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-bold flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-red-400"></span>
+                      {slots.filter((s) => s.status === 'booked').length} Ocupados
+                    </span>
+                  </div>
                 </div>
+
+                {/* Filtro / Abas de Navegação Rápida por Dia */}
+                {Array.from(new Set(slots.map((s) => s.date))).length > 1 && (
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] text-neutral-400 font-semibold block">Filtrar Visualização por Dia:</span>
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+                      <button
+                        onClick={() => setFilterDate('all')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition border ${
+                          filterDate === 'all'
+                            ? 'bg-amber-400 text-black border-amber-300 shadow-md'
+                            : 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:border-amber-500/30'
+                        }`}
+                      >
+                        Todos os Dias ({slots.length})
+                      </button>
+                      {Array.from(new Set(slots.map((s) => s.date))).sort().map((dStr) => {
+                        const dayFree = slots.filter((s) => s.date === dStr && s.status === 'available').length;
+                        const [y, m, d] = dStr.split('-');
+                        const isSelected = filterDate === dStr;
+                        return (
+                          <button
+                            key={dStr}
+                            onClick={() => setFilterDate(dStr)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition border flex items-center gap-1.5 ${
+                              isSelected
+                                ? 'bg-amber-400 text-black border-amber-300 font-bold shadow-md'
+                                : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-amber-500/30'
+                            }`}
+                          >
+                            <span>Dia {d}/{m}</span>
+                            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                              isSelected ? 'bg-black text-amber-300 font-bold' : 'bg-emerald-500/20 text-emerald-300 font-bold'
+                            }`}>
+                              {dayFree} livres
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Lista Separada Dia por Dia */}
+                {slots.length === 0 ? (
+                  <div className="text-center py-12 border border-dashed border-neutral-800 rounded-3xl space-y-2">
+                    <Calendar className="w-10 h-10 text-neutral-600 mx-auto" />
+                    <p className="text-sm font-semibold text-neutral-400">Nenhum horário cadastrado na agenda.</p>
+                    <p className="text-xs text-neutral-500">Cadastre datas e horários no formulário acima.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {(filterDate === 'all'
+                      ? Array.from(new Set(slots.map((s) => s.date))).sort()
+                      : [filterDate]
+                    ).map((dateStr) => {
+                      const daySlots = slots.filter((s) => s.date === dateStr).sort((a, b) => a.time.localeCompare(b.time));
+                      const freeCount = daySlots.filter((s) => s.status === 'available').length;
+                      const pendingCount = daySlots.filter((s) => s.status === 'pending').length;
+                      const bookedCount = daySlots.filter((s) => s.status === 'booked').length;
+                      const isFullyBooked = freeCount === 0 && daySlots.length > 0;
+
+                      return (
+                        <div
+                          key={dateStr}
+                          className="p-5 rounded-3xl bg-neutral-900/80 border border-amber-500/20 space-y-4 shadow-lg hover:border-amber-500/40 transition"
+                        >
+                          {/* Cabeçalho do Dia */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-800/80 pb-3">
+                            <div className="flex items-center space-x-3">
+                              <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-300 shrink-0">
+                                <Calendar className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                                  <span>{formatDateLabel(dateStr)}</span>
+                                  {isFullyBooked ? (
+                                    <span className="text-[10px] bg-red-500/20 text-red-300 font-bold px-2 py-0.5 rounded-full border border-red-500/30">
+                                      LOTADO
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded-full border border-emerald-500/30">
+                                      DISPONÍVEL
+                                    </span>
+                                  )}
+                                </h3>
+                                <p className="text-xs text-neutral-400 pt-0.5">
+                                  {daySlots.length} horário(s) no dia • <span className="text-emerald-400 font-semibold">{freeCount} livre(s)</span>
+                                  {pendingCount > 0 && <span className="text-amber-400 font-semibold"> • {pendingCount} pendente(s)</span>}
+                                  {bookedCount > 0 && <span className="text-neutral-500"> • {bookedCount} preenchido(s)</span>}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 self-end sm:self-auto">
+                              <button
+                                onClick={() => {
+                                  setBatchDate(dateStr);
+                                  window.scrollTo({ top: 350, behavior: 'smooth' });
+                                }}
+                                className="px-3 py-1.5 rounded-xl border border-amber-500/30 text-amber-300 hover:bg-amber-500/10 text-xs font-semibold flex items-center gap-1 transition"
+                                title="Cadastrar mais horários para este mesmo dia"
+                              >
+                                <Plus className="w-3.5 h-3.5" /> Mais Horários
+                              </button>
+
+                              <button
+                                onClick={() => handleDeleteDaySlots(dateStr)}
+                                className="p-1.5 text-neutral-500 hover:text-red-400 rounded-lg hover:bg-red-500/10 transition"
+                                title="Excluir todos os horários deste dia"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Grade de Horários do Dia */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                            {daySlots.map((s) => (
+                              <div
+                                key={s.id}
+                                className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between space-y-2.5 ${
+                                  s.status === 'available'
+                                    ? 'bg-neutral-900 border-emerald-500/30 hover:border-emerald-400'
+                                    : s.status === 'pending'
+                                    ? 'bg-amber-950/20 border-amber-500/40'
+                                    : 'bg-neutral-900/60 border-neutral-800 opacity-75'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-2">
+                                    <Clock className={`w-4 h-4 ${
+                                      s.status === 'available' ? 'text-emerald-400' : s.status === 'pending' ? 'text-amber-400' : 'text-neutral-500'
+                                    }`} />
+                                    <span className="font-mono text-base font-bold text-white">{s.time}</span>
+                                  </div>
+
+                                  <button
+                                    onClick={() => handleDeleteSlot(s.id)}
+                                    className="p-1 text-neutral-500 hover:text-red-400 transition"
+                                    title="Remover Horário"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+
+                                {s.booking && (
+                                  <div className="p-2.5 rounded-xl bg-black/60 border border-neutral-800 text-[11px] space-y-1">
+                                    <div className="flex items-center justify-between">
+                                      <p className="font-semibold text-white truncate">👤 {s.booking.patientName}</p>
+                                      <span className="font-mono text-neutral-400 text-[10px]">{s.booking.patientPhone}</span>
+                                    </div>
+                                    <p className="text-amber-300 truncate">🦷 {s.booking.procedure}</p>
+                                  </div>
+                                )}
+
+                                <div className="pt-1 border-t border-neutral-800/80 space-y-1.5">
+                                  {s.status === 'pending' && s.booking ? (
+                                    <div className="space-y-1.5">
+                                      <button
+                                        onClick={() => handleUpdateBookingStatus(s.booking!.id, 'confirmed')}
+                                        className="w-full py-1.5 px-2 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-black flex items-center justify-center gap-1.5 transition shadow-md"
+                                      >
+                                        <CheckCircle2 className="w-3.5 h-3.5" />
+                                        <span>Confirmar & Abrir WhatsApp</span>
+                                      </button>
+                                      <div className="flex gap-1.5">
+                                        <a
+                                          href={`https://wa.me/${s.booking.patientPhone.replace(/\D/g, '')}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="flex-1 py-1 px-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[10px] font-semibold flex items-center justify-center gap-1"
+                                        >
+                                          <MessageCircle className="w-3 h-3 text-emerald-400" /> WhatsApp
+                                        </a>
+                                        <button
+                                          onClick={() => handleUpdateBookingStatus(s.booking!.id, 'cancelled')}
+                                          className="py-1 px-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 text-[10px] font-semibold"
+                                        >
+                                          Recusar
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : s.status === 'booked' && s.booking ? (
+                                    <div className="space-y-1.5">
+                                      <a
+                                        href={generateWhatsAppConfirmationUrl(s.booking)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="w-full py-1.5 px-2 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 flex items-center justify-center gap-1.5 transition"
+                                      >
+                                        <MessageCircle className="w-3.5 h-3.5" />
+                                        <span>Reenviar WhatsApp</span>
+                                      </a>
+                                      <button
+                                        onClick={() => handleUpdateBookingStatus(s.booking!.id, 'cancelled')}
+                                        className="w-full py-1 px-2 rounded-lg text-neutral-400 hover:text-red-400 text-[10px] transition text-center"
+                                      >
+                                        Cancelar & Liberar Vaga
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() =>
+                                        handleUpdateSlotStatus(
+                                          s.id,
+                                          s.status === 'available' ? 'booked' : 'available'
+                                        )
+                                      }
+                                      className={`w-full py-1.5 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border ${
+                                        s.status === 'available'
+                                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20'
+                                          : 'bg-red-500/10 text-red-300 border-red-500/30 hover:bg-red-500/20'
+                                      }`}
+                                    >
+                                      {s.status === 'available' ? '🟢 Livre (Clique p/ Fechar)' : '🔴 Ocupado (Clique p/ Reabrir)'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
               </div>
 
             </div>

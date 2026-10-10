@@ -71,13 +71,25 @@
       "id": "slot-2",
       "date": "2026-10-10",
       "time": "10:30",
-      "status": "available"
+      "status": "booked",
+      "booking": {
+        "slotId": "slot-2",
+        "date": "2026-10-10",
+        "time": "10:30",
+        "patientName": "aaaaaaaaaaa",
+        "patientPhone": "(34) 34343-4343",
+        "procedure": "Avaliação Geral & Diagnóstico",
+        "notes": "33343434343",
+        "id": "booking-1791598311150",
+        "createdAt": "2026-10-10T02:11:51.150Z",
+        "status": "confirmed"
+      }
     },
     {
       "id": "slot-1791590906842-t4nz",
       "date": "2026-10-10",
       "time": "13:30",
-      "status": "pending",
+      "status": "booked",
       "booking": {
         "slotId": "slot-1791590906842-t4nz",
         "date": "2026-10-10",
@@ -142,6 +154,18 @@
   ],
   "bookings": [
     {
+      "slotId": "slot-2",
+      "date": "2026-10-10",
+      "time": "10:30",
+      "patientName": "aaaaaaaaaaa",
+      "patientPhone": "(34) 34343-4343",
+      "procedure": "Avaliação Geral & Diagnóstico",
+      "notes": "33343434343",
+      "id": "booking-1791598311150",
+      "createdAt": "2026-10-10T02:11:51.150Z",
+      "status": "confirmed"
+    },
+    {
       "slotId": "slot-1",
       "date": "2026-10-10",
       "time": "09:00",
@@ -163,7 +187,7 @@
       "notes": "Teste 12312313221 bla bla bla",
       "id": "booking-1791591011933",
       "createdAt": "2026-10-10T00:10:11.933Z",
-      "status": "pending"
+      "status": "confirmed"
     },
     {
       "slotId": "slot-1791590906842-t4nz",
