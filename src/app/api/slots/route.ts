@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createBooking, getAppData, saveAppData, updateBookingStatus } from '@/lib/storage';
+import { createBooking, createManualBooking, getAppData, saveAppData, updateBookingStatus } from '@/lib/storage';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -155,6 +155,42 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { success: false, message: 'Agendamento não encontrado.' },
         { status: 404, headers: corsHeaders }
+      );
+    }
+
+    // Ação 5: Admin criando agendamento manual
+    if (body.action === 'manual-booking') {
+      const { slotId, date, time, patientName, patientPhone, procedure, notes, status } = body;
+
+      if (!date || !time || !patientName || !patientPhone) {
+        return NextResponse.json(
+          { success: false, message: 'Data, horário, nome e telefone são obrigatórios.' },
+          { status: 400, headers: corsHeaders }
+        );
+      }
+
+      const result = createManualBooking({
+        slotId,
+        date,
+        time,
+        patientName,
+        patientPhone,
+        procedure: procedure || 'Consulta Presencial',
+        notes,
+        status: status || 'confirmed',
+      });
+
+      const appData = getAppData();
+      return NextResponse.json(
+        {
+          success: true,
+          message: 'Agendamento manual registrado com sucesso!',
+          booking: result.booking,
+          slot: result.slot,
+          slots: appData.slots,
+          bookings: appData.bookings,
+        },
+        { headers: corsHeaders }
       );
     }
 

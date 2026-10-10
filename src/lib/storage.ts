@@ -107,3 +107,65 @@ export function updateBookingStatus(bookingId: string, status: 'confirmed' | 'ca
   saveAppData(data);
   return true;
 }
+
+export function createManualBooking(params: {
+  date: string;
+  time: string;
+  slotId?: string;
+  patientName: string;
+  patientPhone: string;
+  procedure: string;
+  notes?: string;
+  status?: 'confirmed' | 'pending';
+}): { booking: BookingRequest; slot: TimeSlot } {
+  const data = getAppData();
+  let slotIndex = -1;
+
+  if (params.slotId) {
+    slotIndex = data.slots.findIndex((s) => s.id === params.slotId);
+  }
+
+  if (slotIndex === -1) {
+    slotIndex = data.slots.findIndex((s) => s.date === params.date && s.time === params.time);
+  }
+
+  let targetSlot: TimeSlot;
+  if (slotIndex === -1) {
+    targetSlot = {
+      id: `slot-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      date: params.date,
+      time: params.time,
+      status: params.status === 'pending' ? 'pending' : 'booked',
+    };
+    data.slots.push(targetSlot);
+    data.slots.sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return a.time.localeCompare(b.time);
+    });
+    slotIndex = data.slots.findIndex((s) => s.id === targetSlot.id);
+  } else {
+    targetSlot = data.slots[slotIndex];
+  }
+
+  const bookingStatus = params.status || 'confirmed';
+
+  const newBooking: BookingRequest = {
+    id: `booking-${Date.now()}`,
+    slotId: targetSlot.id,
+    date: params.date,
+    time: params.time,
+    patientName: params.patientName,
+    patientPhone: params.patientPhone,
+    procedure: params.procedure,
+    notes: params.notes,
+    createdAt: new Date().toISOString(),
+    status: bookingStatus,
+  };
+
+  data.slots[slotIndex].status = bookingStatus === 'confirmed' ? 'booked' : 'pending';
+  data.slots[slotIndex].booking = newBooking;
+  data.bookings.unshift(newBooking);
+
+  saveAppData(data);
+  return { booking: newBooking, slot: data.slots[slotIndex] };
+}

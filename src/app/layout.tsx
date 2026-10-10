@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'Dra. Thaysa Meschiatti | Cirurgiã-Dentista',
     description: 'Agendamentos prévios e links oficiais da Dra. Thaysa Meschiatti (CRO ES 11914).',
-    images: ['/logo-2.jpeg'],
+    images: ['/logo-2.png'],
   },
 };
 
@@ -22,7 +22,7 @@ export default function RootLayout({
     <html lang="pt-BR">
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-        <link rel="icon" href="/logo-1.jpeg" />
+        <link rel="icon" href="/logo-1.png" />
       </head>
       <body className="antialiased selection:bg-amber-500/30 selection:text-amber-200">
         {children}
