@@ -34,6 +34,9 @@ import {
   UserPlus,
   Check,
   Award,
+  Archive,
+  History,
+  CheckCheck,
   X
 } from 'lucide-react';
 import { AppData, BookingRequest, LinkItem, ProfileConfig, TimeSlot } from '@/types';
@@ -76,6 +79,23 @@ export default function AdminPage() {
   const [slotToDelete, setSlotToDelete] = useState<TimeSlot | null>(null);
   const [dayToDelete, setDayToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Unified Action Confirmation State (Confirm, Reject, Cancel, Complete, Delete)
+  const [actionConfirmModal, setActionConfirmModal] = useState<{
+    type: 'confirm' | 'reject' | 'cancel_booked' | 'complete' | 'delete_booking';
+    title: string;
+    message: string;
+    patientName?: string;
+    dateFormatted?: string;
+    time?: string;
+    procedure?: string;
+    confirmText: string;
+    confirmVariant: 'emerald' | 'amber' | 'red';
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+
+  // History / Archive Filter
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'completed' | 'cancelled'>('all');
 
   // Manual Booking Modal State
   const [manualBookingModalOpen, setManualBookingModalOpen] = useState(false);
@@ -564,6 +584,20 @@ export default function AdminPage() {
     }
   };
 
+  const formatDateBR = (dateStr: string) => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+  };
+
+  const cleanPhone = (phone: string) => {
+    const digits = (phone || '').replace(/\D/g, '');
+    return digits.startsWith('55') ? digits : `55${digits}`;
+  };
+
   const generateWhatsAppConfirmationUrl = (booking: {
     patientName: string;
     patientPhone: string;
@@ -571,10 +605,8 @@ export default function AdminPage() {
     time: string;
     procedure: string;
   }) => {
-    const [y, m, d] = booking.date.split('-');
-    const dateFormatted = y && m && d ? `${d}/${m}/${y}` : booking.date;
-    const cleanPhone = booking.patientPhone.replace(/\D/g, '');
-    const phoneWithCountry = cleanPhone.startsWith('55') ? cleanPhone : `55${cleanPhone}`;
+    const dateFormatted = formatDateBR(booking.date);
+    const phoneWithCountry = cleanPhone(booking.patientPhone);
 
     const text = encodeURIComponent(
       `*AGENDAMENTO CONFIRMADO - DRA. THAYSA MESCHIATTI* 🦷✨\n\n` +
@@ -583,13 +615,16 @@ export default function AdminPage() {
       `⏰ *Horário:* ${booking.time}\n` +
       `🦷 *Procedimento:* ${booking.procedure}\n` +
       `📍 *Local:* Consultório Dra. Thaysa Meschiatti - CRO ES 11914\n\n` +
-      `Estamos te aguardando! Caso tenha alguma dúvida ou precise remarcar, favor avisar por aqui.`
+      `Estamos te aguardando! Caso tenha alguma dúvida ou precise remarcar, favor avisar por aqui. 🙏`
     );
 
     return `https://wa.me/${phoneWithCountry}?text=${text}`;
   };
 
-  const handleUpdateBookingStatus = async (bookingId: string, status: 'confirmed' | 'cancelled') => {
+  const handleUpdateBookingStatus = async (
+    bookingId: string,
+    status: 'confirmed' | 'cancelled' | 'completed'
+  ) => {
     const booking =
       data?.bookings.find((b) => b.id === bookingId) ||
       data?.slots.find((s) => s.booking?.id === bookingId)?.booking;
@@ -622,6 +657,7 @@ export default function AdminPage() {
       const json = await res.json();
       if (json.success) {
         fetchData();
+        setActionConfirmModal(null);
 
         if (status === 'confirmed' && booking && waUrl) {
           // 1. Se abriu em aba do navegador desktop, atualiza o endereço
@@ -650,6 +686,97 @@ export default function AdminPage() {
       if (syncPopup && !syncPopup.closed) syncPopup.close();
       alert('Erro ao atualizar solicitação.');
     }
+  };
+
+  const handleDeleteBooking = async (bookingId: string) => {
+    try {
+      const res = await fetch(`/api/slots?bookingId=${bookingId}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        fetchData();
+        setActionConfirmModal(null);
+      } else {
+        alert(json.message || 'Erro ao excluir agendamento.');
+      }
+    } catch (err) {
+      alert('Erro ao excluir agendamento.');
+    }
+  };
+
+  // Confirmation Prompts for Actions
+  const promptConfirmBooking = (b: BookingRequest) => {
+    setActionConfirmModal({
+      type: 'confirm',
+      title: 'Confirmar Agendamento?',
+      message: 'Deseja confirmar o agendamento deste paciente? O horário ficará preenchido na agenda e o WhatsApp será aberto para enviar a mensagem de confirmação.',
+      patientName: b.patientName,
+      dateFormatted: formatDateBR(b.date),
+      time: b.time,
+      procedure: b.procedure,
+      confirmText: 'Sim, Confirmar Horário',
+      confirmVariant: 'emerald',
+      onConfirm: () => handleUpdateBookingStatus(b.id, 'confirmed'),
+    });
+  };
+
+  const promptRejectBooking = (b: BookingRequest) => {
+    setActionConfirmModal({
+      type: 'reject',
+      title: 'Recusar Pré-Agendamento?',
+      message: 'Deseja recusar esta solicitação? O agendamento será arquivado no histórico como cancelado/recusado (recusa lógica), liberando a vaga na agenda para outros pacientes.',
+      patientName: b.patientName,
+      dateFormatted: formatDateBR(b.date),
+      time: b.time,
+      procedure: b.procedure,
+      confirmText: 'Sim, Recusar Solicitação',
+      confirmVariant: 'red',
+      onConfirm: () => handleUpdateBookingStatus(b.id, 'cancelled'),
+    });
+  };
+
+  const promptCancelBooked = (b: BookingRequest) => {
+    setActionConfirmModal({
+      type: 'cancel_booked',
+      title: 'Cancelar e Liberar Horário?',
+      message: 'Tem certeza que deseja cancelar este agendamento já confirmado? A vaga na agenda será liberada novamente para novos pacientes e o registro será guardado no histórico.',
+      patientName: b.patientName,
+      dateFormatted: formatDateBR(b.date),
+      time: b.time,
+      procedure: b.procedure,
+      confirmText: 'Sim, Cancelar e Liberar Vaga',
+      confirmVariant: 'amber',
+      onConfirm: () => handleUpdateBookingStatus(b.id, 'cancelled'),
+    });
+  };
+
+  const promptCompleteBooking = (b: BookingRequest) => {
+    setActionConfirmModal({
+      type: 'complete',
+      title: 'Concluir & Arquivar Atendimento?',
+      message: 'Marcar este atendimento como concluído e realizado? O agendamento sairá da lista ativa e será arquivado com segurança no Histórico de Atendimentos.',
+      patientName: b.patientName,
+      dateFormatted: formatDateBR(b.date),
+      time: b.time,
+      procedure: b.procedure,
+      confirmText: 'Concluir & Arquivar',
+      confirmVariant: 'emerald',
+      onConfirm: () => handleUpdateBookingStatus(b.id, 'completed'),
+    });
+  };
+
+  const promptDeleteBooking = (b: BookingRequest) => {
+    setActionConfirmModal({
+      type: 'delete_booking',
+      title: 'Excluir Definitivamente?',
+      message: 'Tem certeza que deseja apagar permanentemente este registro de agendamento do histórico? Esta ação é irreversível.',
+      patientName: b.patientName,
+      dateFormatted: formatDateBR(b.date),
+      time: b.time,
+      procedure: b.procedure,
+      confirmText: 'Excluir Permanentemente',
+      confirmVariant: 'red',
+      onConfirm: () => handleDeleteBooking(b.id),
+    });
   };
 
   const handleExportBackup = () => {
@@ -761,6 +888,12 @@ export default function AdminPage() {
   const { profile, links, slots, bookings } = data;
   const pendingBookings = bookings.filter((b) => b.status === 'pending');
   const confirmedBookings = bookings.filter((b) => b.status === 'confirmed');
+  const archivedBookings = bookings.filter((b) => b.status === 'completed' || b.status === 'cancelled');
+  const filteredHistory = archivedBookings.filter((b) => {
+    if (historyFilter === 'completed') return b.status === 'completed';
+    if (historyFilter === 'cancelled') return b.status === 'cancelled';
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-[#faf8f5] text-stone-900 flex flex-col selection:bg-amber-200 selection:text-amber-950">
@@ -1380,7 +1513,7 @@ export default function AdminPage() {
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-2">
                           <div>
                             <span className="text-xs text-amber-800 font-mono font-semibold">
-                              Solicitado para: {b.date} às {b.time}
+                              Solicitado para: {formatDateBR(b.date)} às {b.time}
                             </span>
                             <h3 className="text-base font-bold text-stone-900">{b.patientName}</h3>
                           </div>
@@ -1402,20 +1535,26 @@ export default function AdminPage() {
 
                         <div className="flex flex-wrap items-center gap-2 pt-1">
                           <button
-                            onClick={() => handleUpdateBookingStatus(b.id, 'confirmed')}
+                            onClick={() => promptConfirmBooking(b)}
                             className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
                           >
                             <CheckCircle2 className="w-4 h-4" /> Confirmar Horário
                           </button>
                           <button
-                            onClick={() => handleUpdateBookingStatus(b.id, 'cancelled')}
+                            onClick={() => promptRejectBooking(b)}
                             className="px-3.5 py-1.5 rounded-xl bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
                           >
                             <XCircle className="w-4 h-4" /> Recusar / Liberar
                           </button>
                           <a
-                            href={`https://wa.me/${b.patientPhone.replace(/\D/g, '')}?text=${encodeURIComponent(
-                              `Olá ${b.patientName}! Aqui é a Dra. Thaysa Meschiatti. Recebi sua solicitação de agendamento para ${b.date} às ${b.time}.`
+                            href={`https://wa.me/${cleanPhone(b.patientPhone)}?text=${encodeURIComponent(
+                              `Olá, *${b.patientName}*! Tudo bem? 🦷✨\n\n` +
+                              `Aqui é a equipe da *Dra. Thaysa Meschiatti*.\n` +
+                              `Recebemos sua solicitação de pré-agendamento para:\n\n` +
+                              `📅 *Data:* ${formatDateBR(b.date)}\n` +
+                              `⏰ *Horário:* ${b.time}\n` +
+                              `🦷 *Procedimento:* ${b.procedure}\n\n` +
+                              `Podemos confirmar esse horário para você?`
                             )}`}
                             target="_blank"
                             rel="noopener noreferrer"
@@ -1455,7 +1594,7 @@ export default function AdminPage() {
                         <div className="flex items-center justify-between gap-2 border-b border-stone-100 pb-2">
                           <div>
                             <span className="text-xs text-emerald-800 font-mono font-semibold">
-                              {b.date} às {b.time}
+                              {formatDateBR(b.date)} às {b.time}
                             </span>
                             <h3 className="text-base font-bold text-stone-900">{b.patientName}</h3>
                           </div>
@@ -1469,20 +1608,28 @@ export default function AdminPage() {
                           {b.notes && <p><span className="text-stone-400 font-medium">Obs:</span> {b.notes}</p>}
                         </div>
 
-                        <div className="flex items-center gap-2 pt-1">
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <button
+                            onClick={() => promptCompleteBooking(b)}
+                            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
+                            title="Marcar como atendimento realizado e arquivar no histórico"
+                          >
+                            <CheckCheck className="w-4 h-4" />
+                            <span>Concluir & Arquivar</span>
+                          </button>
                           <a
                             href={generateWhatsAppConfirmationUrl(b)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
+                            className="py-2 px-3 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-800 font-extrabold text-xs flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
                           >
                             <MessageCircle className="w-4 h-4" />
-                            <span>Enviar Confirmação WhatsApp</span>
+                            <span>WhatsApp</span>
                           </a>
                           <button
-                            onClick={() => handleUpdateBookingStatus(b.id, 'cancelled')}
-                            className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition cursor-pointer"
-                            title="Cancelar / Liberar Horário"
+                            onClick={() => promptCancelBooked(b)}
+                            className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition cursor-pointer ml-auto"
+                            title="Cancelar Agendamento & Liberar Vaga"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -1756,7 +1903,7 @@ export default function AdminPage() {
                                   {s.status === 'pending' && s.booking ? (
                                     <div className="space-y-1.5">
                                       <button
-                                        onClick={() => handleUpdateBookingStatus(s.booking!.id, 'confirmed')}
+                                        onClick={() => promptConfirmBooking(s.booking!)}
                                         className="w-full py-1.5 px-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
                                       >
                                         <CheckCircle2 className="w-3.5 h-3.5" />
@@ -1764,7 +1911,15 @@ export default function AdminPage() {
                                       </button>
                                       <div className="flex gap-1.5">
                                         <a
-                                          href={`https://wa.me/${s.booking.patientPhone.replace(/\D/g, '')}`}
+                                          href={`https://wa.me/${cleanPhone(s.booking.patientPhone)}?text=${encodeURIComponent(
+                                            `Olá, *${s.booking.patientName}*! Tudo bem? 🦷✨\n\n` +
+                                            `Aqui é a equipe da *Dra. Thaysa Meschiatti*.\n` +
+                                            `Recebemos sua solicitação de pré-agendamento para:\n\n` +
+                                            `📅 *Data:* ${formatDateBR(s.booking.date)}\n` +
+                                            `⏰ *Horário:* ${s.booking.time}\n` +
+                                            `🦷 *Procedimento:* ${s.booking.procedure}\n\n` +
+                                            `Podemos confirmar esse horário para você?`
+                                          )}`}
                                           target="_blank"
                                           rel="noopener noreferrer"
                                           className="flex-1 py-1 px-2 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-800 text-[10px] font-semibold flex items-center justify-center gap-1 border border-stone-200 cursor-pointer"
@@ -1772,7 +1927,7 @@ export default function AdminPage() {
                                           <MessageCircle className="w-3 h-3 text-emerald-600" /> WhatsApp
                                         </a>
                                         <button
-                                          onClick={() => handleUpdateBookingStatus(s.booking!.id, 'cancelled')}
+                                          onClick={() => promptRejectBooking(s.booking!)}
                                           className="py-1 px-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[10px] font-semibold cursor-pointer"
                                         >
                                           Recusar
@@ -1781,6 +1936,13 @@ export default function AdminPage() {
                                     </div>
                                   ) : s.status === 'booked' && s.booking ? (
                                     <div className="space-y-1.5">
+                                      <button
+                                        onClick={() => promptCompleteBooking(s.booking!)}
+                                        className="w-full py-1.5 px-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
+                                      >
+                                        <CheckCheck className="w-3.5 h-3.5" />
+                                        <span>Concluir & Arquivar</span>
+                                      </button>
                                       <a
                                         href={generateWhatsAppConfirmationUrl(s.booking)}
                                         target="_blank"
@@ -1791,7 +1953,7 @@ export default function AdminPage() {
                                         <span>Reenviar WhatsApp</span>
                                       </a>
                                       <button
-                                        onClick={() => handleUpdateBookingStatus(s.booking!.id, 'cancelled')}
+                                        onClick={() => promptCancelBooked(s.booking!)}
                                         className="w-full py-1 px-2 rounded-lg text-stone-500 hover:text-red-600 text-[10px] transition text-center cursor-pointer"
                                       >
                                         Cancelar & Liberar Vaga
@@ -1834,6 +1996,140 @@ export default function AdminPage() {
                   </div>
                 )}
 
+              </div>
+
+              {/* HISTÓRICO & ARQUIVO DE AGENDAMENTOS */}
+              <div className="bg-white p-6 rounded-3xl border border-amber-200/80 space-y-6 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-200/70 pb-4">
+                  <div>
+                    <h2 className="serif-title text-xl font-bold text-stone-900 flex items-center gap-2">
+                      <Archive className="w-5 h-5 text-amber-600" /> Histórico & Arquivo de Atendimentos ({archivedBookings.length})
+                    </h2>
+                    <p className="text-xs text-stone-500">
+                      Registro de pacientes atendidos, consultas concluídas e solicitações recusadas/canceladas.
+                    </p>
+                  </div>
+
+                  {/* Filter Pills */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                    <button
+                      onClick={() => setHistoryFilter('all')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border cursor-pointer ${
+                        historyFilter === 'all'
+                          ? 'bg-amber-400 text-stone-950 border-amber-500 shadow-xs'
+                          : 'bg-stone-50 text-stone-700 border-stone-200 hover:border-amber-400'
+                      }`}
+                    >
+                      Todos ({archivedBookings.length})
+                    </button>
+                    <button
+                      onClick={() => setHistoryFilter('completed')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border flex items-center gap-1 cursor-pointer ${
+                        historyFilter === 'completed'
+                          ? 'bg-emerald-600 text-white border-emerald-700 font-bold shadow-xs'
+                          : 'bg-stone-50 text-stone-700 border-stone-200 hover:border-emerald-400'
+                      }`}
+                    >
+                      <span>Concluídos</span>
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded-full font-bold">
+                        {archivedBookings.filter((b) => b.status === 'completed').length}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setHistoryFilter('cancelled')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border flex items-center gap-1 cursor-pointer ${
+                        historyFilter === 'cancelled'
+                          ? 'bg-stone-800 text-white border-stone-900 font-bold shadow-xs'
+                          : 'bg-stone-50 text-stone-700 border-stone-200 hover:border-stone-400'
+                      }`}
+                    >
+                      <span>Cancelados/Recusados</span>
+                      <span className="text-[10px] bg-stone-200 text-stone-800 px-1.5 py-0.2 rounded-full font-bold">
+                        {archivedBookings.filter((b) => b.status === 'cancelled').length}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {filteredHistory.length === 0 ? (
+                  <div className="text-center py-10 border border-dashed border-stone-300 rounded-3xl space-y-2">
+                    <History className="w-8 h-8 text-stone-400 mx-auto" />
+                    <p className="text-sm font-semibold text-stone-600">Nenhum atendimento neste histórico.</p>
+                    <p className="text-xs text-stone-400">
+                      Ao concluir atendimentos ou recusar pré-agendamentos, os registros são mantidos aqui.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {filteredHistory.map((b) => {
+                      const isCompleted = b.status === 'completed';
+                      return (
+                        <div
+                          key={b.id}
+                          className={`p-4 rounded-2xl border space-y-3 transition shadow-xs ${
+                            isCompleted
+                              ? 'bg-white border-emerald-200/90 hover:border-emerald-400'
+                              : 'bg-stone-50 border-stone-200 hover:border-stone-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 border-b border-stone-100 pb-2">
+                            <div>
+                              <span className="text-xs text-stone-500 font-mono font-medium">
+                                {formatDateBR(b.date)} às {b.time}
+                              </span>
+                              <h3 className="text-base font-bold text-stone-900">{b.patientName}</h3>
+                            </div>
+                            <span
+                              className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold border ${
+                                isCompleted
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  : 'bg-stone-200 text-stone-700 border-stone-300'
+                              }`}
+                            >
+                              {isCompleted ? '✓ Atendido' : '✕ Cancelado'}
+                            </span>
+                          </div>
+
+                          <div className="text-xs text-stone-600 space-y-1">
+                            <p>
+                              <span className="text-stone-400 font-medium">Procedimento:</span>{' '}
+                              <span className="font-semibold text-stone-800">{b.procedure}</span>
+                            </p>
+                            <p>
+                              <span className="text-stone-400 font-medium">WhatsApp:</span>{' '}
+                              <span className="font-mono">{b.patientPhone}</span>
+                            </p>
+                            {b.notes && (
+                              <p>
+                                <span className="text-stone-400 font-medium">Obs:</span> {b.notes}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-1 border-t border-stone-100">
+                            <a
+                              href={`https://wa.me/${cleanPhone(b.patientPhone)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-xl border border-stone-200 hover:bg-stone-100 text-stone-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                            >
+                              <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Conversar no WhatsApp</span>
+                            </a>
+
+                            <button
+                              onClick={() => promptDeleteBooking(b)}
+                              className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition cursor-pointer ml-auto"
+                              title="Excluir Definitivamente este Registro"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
             </div>
@@ -2120,30 +2416,126 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* MANUAL APPOINTMENT MODAL */}
-      {manualBookingModalOpen && (
+      {/* UNIFIED ACTION CONFIRMATION MODAL */}
+      {actionConfirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/60 backdrop-blur-xs animate-fadeIn">
-          <div className="w-full max-w-lg bg-white rounded-3xl border border-amber-200/90 p-6 space-y-5 shadow-2xl relative text-stone-900">
+          <div className="w-full max-w-md bg-white rounded-3xl border border-amber-200/90 p-6 space-y-5 shadow-2xl relative text-stone-900">
             <button
-              onClick={() => setManualBookingModalOpen(false)}
-              className="absolute top-4 right-4 text-stone-400 hover:text-stone-700 p-1 rounded-full hover:bg-stone-100 cursor-pointer"
+              onClick={() => setActionConfirmModal(null)}
+              className="absolute top-4 right-4 text-stone-400 hover:text-stone-700 p-1.5 rounded-full hover:bg-stone-100 transition cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
 
-            <div className="space-y-1">
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-semibold">
-                <UserPlus className="w-3.5 h-3.5" /> Agendamento Interno
+            <div className="text-center space-y-3">
+              <div
+                className={`w-14 h-14 rounded-full mx-auto flex items-center justify-center shadow-xs border ${
+                  actionConfirmModal.confirmVariant === 'emerald'
+                    ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
+                    : actionConfirmModal.confirmVariant === 'amber'
+                    ? 'bg-amber-100 text-amber-800 border-amber-300'
+                    : 'bg-red-100 text-red-600 border-red-300'
+                }`}
+              >
+                {actionConfirmModal.confirmVariant === 'emerald' && <CheckCircle2 className="w-7 h-7" />}
+                {actionConfirmModal.confirmVariant === 'amber' && <AlertTriangle className="w-7 h-7" />}
+                {actionConfirmModal.confirmVariant === 'red' && <AlertTriangle className="w-7 h-7" />}
               </div>
-              <h2 className="serif-title text-xl font-bold text-stone-900">
-                Cadastrar Agendamento Manualmente
-              </h2>
-              <p className="text-xs text-stone-500">
-                Preencha os dados do paciente para agendar diretamente pelo consultório ou WhatsApp.
-              </p>
+
+              <div>
+                <h3 className="serif-title text-xl font-bold text-stone-900">
+                  {actionConfirmModal.title}
+                </h3>
+                <p className="text-xs text-stone-600 mt-1.5 leading-relaxed">
+                  {actionConfirmModal.message}
+                </p>
+              </div>
             </div>
 
-            <form onSubmit={handleSubmitManualBooking} className="space-y-4">
+            {actionConfirmModal.patientName && (
+              <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200 text-xs space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-stone-500">Paciente:</span>
+                  <span className="font-bold text-stone-900">{actionConfirmModal.patientName}</span>
+                </div>
+                {actionConfirmModal.dateFormatted && (
+                  <div className="flex justify-between">
+                    <span className="text-stone-500">Data e Horário:</span>
+                    <span className="font-mono font-semibold text-stone-800">
+                      {actionConfirmModal.dateFormatted} às {actionConfirmModal.time}
+                    </span>
+                  </div>
+                )}
+                {actionConfirmModal.procedure && (
+                  <div className="flex justify-between">
+                    <span className="text-stone-500">Procedimento:</span>
+                    <span className="font-semibold text-amber-800">{actionConfirmModal.procedure}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setActionConfirmModal(null)}
+                className="py-2.5 rounded-xl border border-stone-200 text-stone-600 hover:text-stone-900 text-xs font-semibold hover:bg-stone-50 transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  actionConfirmModal.onConfirm();
+                }}
+                className={`py-2.5 rounded-xl text-white font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-md cursor-pointer ${
+                  actionConfirmModal.confirmVariant === 'emerald'
+                    ? 'bg-emerald-600 hover:bg-emerald-500'
+                    : actionConfirmModal.confirmVariant === 'amber'
+                    ? 'bg-amber-600 hover:bg-amber-500'
+                    : 'bg-red-600 hover:bg-red-500'
+                }`}
+              >
+                {actionConfirmModal.confirmVariant === 'emerald' ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4" />
+                )}
+                <span>{actionConfirmModal.confirmText}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MANUAL APPOINTMENT MODAL */}
+      {manualBookingModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-950/60 backdrop-blur-xs animate-fadeIn">
+          <div className="w-full max-w-lg max-h-[92vh] flex flex-col bg-white rounded-3xl border border-amber-200/90 shadow-2xl relative text-stone-900 overflow-hidden">
+            
+            {/* Header */}
+            <div className="p-5 sm:p-6 border-b border-stone-100 flex items-start justify-between gap-4 shrink-0 bg-stone-50/50">
+              <div className="space-y-1">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-semibold">
+                  <UserPlus className="w-3.5 h-3.5" /> Agendamento Interno
+                </div>
+                <h2 className="serif-title text-xl font-bold text-stone-900">
+                  Cadastrar Agendamento Manualmente
+                </h2>
+                <p className="text-xs text-stone-500">
+                  Preencha os dados do paciente para agendar diretamente pelo consultório ou WhatsApp.
+                </p>
+              </div>
+              <button
+                onClick={() => setManualBookingModalOpen(false)}
+                className="text-stone-400 hover:text-stone-700 p-1.5 rounded-full hover:bg-stone-200/60 transition cursor-pointer shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Scrollable Form Body */}
+            <form onSubmit={handleSubmitManualBooking} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-stone-700">Data do Atendimento *</label>
@@ -2247,7 +2639,8 @@ export default function AdminPage() {
                 </label>
               </div>
 
-              <div className="flex items-center justify-end space-x-3 pt-2">
+              {/* Modal Footer */}
+              <div className="pt-2 flex items-center justify-end space-x-3 border-t border-stone-100">
                 <button
                   type="button"
                   onClick={() => setManualBookingModalOpen(false)}

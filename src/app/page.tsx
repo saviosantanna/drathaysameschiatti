@@ -52,9 +52,23 @@ const renderIcon = (iconName: string) => {
 };
 
 export default function PublicPage() {
-  const [data, setData] = useState<AppData>(initialData);
+  const [data, setData] = useState<AppData>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('thaysa_app_data');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && parsed.profile) {
+            return parsed;
+          }
+        }
+      } catch (e) {}
+    }
+    return initialData;
+  });
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'links' | 'schedule'>('links');
+  const [todayStr, setTodayStr] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     if (initialData.slots && initialData.slots.length > 0) {
       const dates = Array.from(new Set(initialData.slots.map((s) => s.date))).sort();
@@ -81,8 +95,14 @@ export default function PublicPage() {
   const [copiedLink, setCopiedLink] = useState(false);
 
   useEffect(() => {
-    setCurrentYear(new Date().getFullYear().toString());
-    fetchData();
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const today = `${year}-${month}-${day}`;
+    setTodayStr(today);
+    setCurrentYear(year.toString());
+    fetchData(today);
   }, []);
 
   // Timer Effect for Redirect
@@ -98,17 +118,32 @@ export default function PublicPage() {
     return () => clearTimeout(timer);
   }, [bookingSuccess, redirectCountdown, whatsappRedirectUrl]);
 
-  const fetchData = async () => {
+  const fetchData = async (currentToday?: string) => {
     try {
       const res = await fetch('/api/data', { cache: 'no-store' });
       if (!res.ok) return;
       const json = await res.json();
       if (json && json.success && json.data) {
         setData(json.data);
+        try {
+          localStorage.setItem('thaysa_app_data', JSON.stringify(json.data));
+        } catch (e) {}
+
+        const todayFilter = currentToday || todayStr;
         if (json.data.slots && json.data.slots.length > 0) {
-          const uniqueDates = Array.from(new Set(json.data.slots.map((s: TimeSlot) => s.date))).sort();
-          if (uniqueDates.length > 0 && !selectedDate) {
-            setSelectedDate(uniqueDates[0] as string);
+          const futureDates = Array.from(
+            new Set(
+              json.data.slots
+                .filter((s: TimeSlot) => !todayFilter || s.date >= todayFilter)
+                .map((s: TimeSlot) => s.date)
+            )
+          ).sort();
+          if (futureDates.length > 0) {
+            setSelectedDate((prev) =>
+              !prev || (todayFilter && prev < todayFilter) || !futureDates.includes(prev)
+                ? (futureDates[0] as string)
+                : prev
+            );
           }
         }
       }
@@ -188,18 +223,21 @@ export default function PublicPage() {
         const dateFormatted = `${day}/${month}/${year}`;
         
         const waText = encodeURIComponent(
-          `*SOLICITAÇÃO DE AGENDAMENTO - DRA. THAYSA MESCHIATTI*\n\n` +
-          `• *Data:* ${dateFormatted}\n` +
-          `• *Horário:* ${bookingModalSlot.time}\n` +
-          `• *Nome:* ${patientName}\n` +
-          `• *Telefone:* ${patientPhone}\n` +
-          `• *Procedimento:* ${procedure}\n` +
-          (notes ? `• *Observação:* ${notes}\n` : '') +
-          `\nOlá Dra. Thaysa! Acabei de solicitar a pré-reserva deste horário pelo seu link. Poderia me confirmar?`
+          `*SOLICITAÇÃO DE AGENDAMENTO - DRA. THAYSA MESCHIATTI* 🦷✨\n\n` +
+          `Olá Dra. Thaysa! Acabei de solicitar uma pré-reserva de horário pelo seu site:\n\n` +
+          `👤 *Paciente:* ${patientName}\n` +
+          `📱 *WhatsApp:* ${patientPhone}\n` +
+          `📅 *Data:* ${dateFormatted}\n` +
+          `⏰ *Horário:* ${bookingModalSlot.time}\n` +
+          `🦷 *Procedimento:* ${procedure}\n` +
+          (notes ? `📝 *Observação:* ${notes}\n` : '') +
+          `\nPoderia me confirmar a disponibilidade deste horário? Muito obrigado(a)! 🙏😊`
         );
 
         const targetWaNumber = data?.profile.whatsappNumber || '5527996121643';
-        const waUrl = `https://wa.me/${targetWaNumber}?text=${waText}`;
+        const cleanNumber = targetWaNumber.replace(/\D/g, '');
+        const phoneWithCountry = cleanNumber.startsWith('55') ? cleanNumber : `55${cleanNumber}`;
+        const waUrl = `https://wa.me/${phoneWithCountry}?text=${waText}`;
 
         setWhatsappRedirectUrl(waUrl);
         setBookingSuccess(true);
@@ -239,25 +277,24 @@ export default function PublicPage() {
   const { profile, links, slots } = data;
   const activeLinks = links.filter((l) => l.isActive).sort((a, b) => a.order - b.order);
 
-  const uniqueDates = Array.from(new Set(slots.map((s) => s.date))).sort();
-  const slotsForSelectedDate = slots.filter((s) => s.date === selectedDate);
-  const availableCount = slots.filter((s) => s.status === 'available').length;
+  // Não exibe horários passados: apenas hoje e datas futuras
+  const activeSlots = (slots || []).filter((s) => !todayStr || s.date >= todayStr);
+  const uniqueDates = Array.from(new Set(activeSlots.map((s) => s.date))).sort();
+  const slotsForSelectedDate = activeSlots.filter((s) => s.date === selectedDate);
+  const availableCount = activeSlots.filter((s) => s.status === 'available').length;
 
   const formatDateDetailed = (dateStr: string) => {
     if (!dateStr) return { weekday: '', day: '', month: '', fullLabel: '' };
     try {
       const [y, m, d] = dateStr.split('-');
       const dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      const diffDays = Math.round((dateObj.getTime() - today.getTime()) / (1000 * 3600 * 24));
       const weekdayShort = dateObj.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '').toUpperCase();
       const monthShort = dateObj.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
 
       let prefix = '';
-      if (diffDays === 0) prefix = 'Hoje';
-      else if (diffDays === 1) prefix = 'Amanhã';
+      if (todayStr && dateStr === todayStr) {
+        prefix = 'Hoje';
+      }
 
       return {
         weekday: prefix || weekdayShort,
@@ -483,7 +520,7 @@ export default function PublicPage() {
                 {/* Horizontal Date Selector Carousel */}
                 <div className="flex gap-2 overflow-x-auto pb-1.5 no-scrollbar scroll-smooth snap-x">
                   {uniqueDates.map((dateStr) => {
-                    const countForDate = slots.filter((s) => s.date === dateStr && s.status === 'available').length;
+                    const countForDate = activeSlots.filter((s) => s.date === dateStr && s.status === 'available').length;
                     const isSelected = selectedDate === dateStr;
                     const dateInfo = formatDateDetailed(dateStr);
 

@@ -38,7 +38,7 @@ export interface BookingRequest {
   procedure: string;
   notes?: string;
   createdAt: string;
-  status: 'pending' | 'confirmed' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
 }
 
 export interface TimeSlot {

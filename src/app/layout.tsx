@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://drathaysameschiatti.com.br'),
   title: 'Dra. Thaysa Meschiatti | Cirurgiã-Dentista • CRO ES 11914',
   description: 'Agende seu atendimento odontológico com a Dra. Thaysa Meschiatti. Cirurgiã-Dentista especializada em odontologia estética e cuidado integrado. Acesse horários e links úteis.',
   keywords: ['Dentista', 'Dra. Thaysa Meschiatti', 'Odontologia', 'Agendamento Dentista', 'CRO ES 11914', 'Estética Dental'],

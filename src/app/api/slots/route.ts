@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createBooking, createManualBooking, getAppData, saveAppData, updateBookingStatus } from '@/lib/storage';
+import { createBooking, createManualBooking, deleteBooking, getAppData, saveAppData, updateBookingStatus } from '@/lib/storage';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,6 +19,7 @@ export async function GET() {
       { headers: corsHeaders }
     );
   } catch (error) {
+    console.error('API /slots POST error:', error);
     return NextResponse.json(
       { success: false, message: 'Erro ao buscar horários.' },
       { status: 500, headers: corsHeaders }
@@ -199,6 +200,7 @@ export async function POST(req: Request) {
       { status: 400, headers: corsHeaders }
     );
   } catch (error) {
+    console.error('API /slots POST error:', error);
     return NextResponse.json(
       { success: false, message: 'Erro ao processar requisição de horários.' },
       { status: 500, headers: corsHeaders }
@@ -210,10 +212,20 @@ export async function DELETE(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const slotId = searchParams.get('slotId');
+    const bookingId = searchParams.get('bookingId');
+
+    if (bookingId) {
+      const success = deleteBooking(bookingId);
+      if (success) {
+        const appData = getAppData();
+        return NextResponse.json({ success: true, slots: appData.slots, bookings: appData.bookings }, { headers: corsHeaders });
+      }
+      return NextResponse.json({ success: false, message: 'Agendamento não encontrado.' }, { status: 404, headers: corsHeaders });
+    }
 
     if (!slotId) {
       return NextResponse.json(
-        { success: false, message: 'slotId é obrigatório.' },
+        { success: false, message: 'slotId ou bookingId é obrigatório.' },
         { status: 400, headers: corsHeaders }
       );
     }
@@ -224,6 +236,7 @@ export async function DELETE(req: Request) {
 
     return NextResponse.json({ success: true, slots: appData.slots }, { headers: corsHeaders });
   } catch (error) {
+    console.error('API /slots POST error:', error);
     return NextResponse.json(
       { success: false, message: 'Erro ao deletar horário.' },
       { status: 500, headers: corsHeaders }

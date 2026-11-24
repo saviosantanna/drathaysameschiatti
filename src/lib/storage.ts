@@ -87,7 +87,7 @@ export function createBooking(request: Omit<BookingRequest, 'id' | 'createdAt' |
   return { booking: newBooking, slot: data.slots[slotIndex] };
 }
 
-export function updateBookingStatus(bookingId: string, status: 'confirmed' | 'cancelled'): boolean {
+export function updateBookingStatus(bookingId: string, status: 'confirmed' | 'cancelled' | 'completed'): boolean {
   const data = getAppData();
   const bookingIndex = data.bookings.findIndex((b) => b.id === bookingId);
   if (bookingIndex === -1) return false;
@@ -98,7 +98,7 @@ export function updateBookingStatus(bookingId: string, status: 'confirmed' | 'ca
   if (slotIndex !== -1) {
     if (status === 'confirmed') {
       data.slots[slotIndex].status = 'booked';
-    } else if (status === 'cancelled') {
+    } else if (status === 'cancelled' || status === 'completed') {
       data.slots[slotIndex].status = 'available';
       delete data.slots[slotIndex].booking;
     }
@@ -168,4 +168,19 @@ export function createManualBooking(params: {
 
   saveAppData(data);
   return { booking: newBooking, slot: data.slots[slotIndex] };
+}
+
+export function deleteBooking(bookingId: string): boolean {
+  const data = getAppData();
+  const index = data.bookings.findIndex((b) => b.id === bookingId);
+  if (index === -1) return false;
+  const booking = data.bookings[index];
+  data.bookings.splice(index, 1);
+  const slot = data.slots.find((s) => s.id === booking.slotId);
+  if (slot && slot.booking?.id === bookingId) {
+    slot.status = 'available';
+    delete slot.booking;
+  }
+  saveAppData(data);
+  return true;
 }
